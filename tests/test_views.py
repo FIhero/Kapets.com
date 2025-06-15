@@ -1,11 +1,7 @@
 import pytest
 
 
-@pytest.mark.parametrize(
-    "hour, expected",
-    []
-)
-
+@pytest.mark.parametrize("hour, expected", [])
 def test_get_greeting(hour, expected):
     pass
 
