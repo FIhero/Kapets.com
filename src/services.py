@@ -1,70 +1,70 @@
-import os
-from typing import Dict, Optional, Tuple
+import json
+import logging
+from datetime import datetime
+from functools import reduce
 
-import pandas as pd
+from src.utils import load_and_prepare_data, logger
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def load_data(file_path: str = "data/operations.xlsx") -> Optional[pd.DataFrame]:
-    """Загружает данные из Excel файла"""
+def analyze_cashback(file_xlsx: str, date_time: str) -> str:
+    """Анализирует кэшбэк по категориям за указанный месяц и год"""
+    logger.info(f"Запуск анализа кэшбэка. Файл: {file_xlsx}, Дата: {date_time}")
+
     try:
-        if not os.path.exists(file_path):
-            print(f"Файл не найден: {file_path}")
-            return None
-        return pd.read_excel(file_path)
-    except Exception as e:
-        print(f"Ошибка загрузки данных: {e}")
-        return None
+        logger.debug("Загрузка данных...")
+        df = load_and_prepare_data(file_xlsx)
+        if df is None:
+            logger.error("Не удалось загрузить данные")
+            return json.dumps({"error": "Ошибка загрузки данных"})
 
+        logger.debug("Парсинг даты...")
+        target_date = datetime.strptime(date_time, "%Y-%m-%d %H:%M:%S")
+        logger.info(f"Анализируем период: {target_date.month}.{target_date.year}")
 
-def analyze_cashback(
-    df: pd.DataFrame, year: Optional[int] = None, month: Optional[int] = None
-) -> Tuple[Optional[Dict[str, float]], Optional[str]]:
-    """Анализирует кэшбэк в переданном DataFrame"""
-    try:
-        required_cols = ["дата операции", "категория", "кэшбэк"]
-        if not all(col in df.columns for col in required_cols):
-            missing = [col for col in required_cols if col not in df.columns]
-            print(f"Отсутствуют столбцы: {missing}")
-            return None, None
+        logger.debug("Фильтрация данных по дате...")
+        filtered_data = filter(
+            lambda x: x["date"].year == target_date.year
+            and x["date"].month == target_date.month,
+            df.to_dict("records"),
+        )
+        filtered_list = list(filtered_data)
 
-        df["дата операции"] = pd.to_datetime(df["дата операции"], errors="coerce")
-        df = df.dropna(subset=["дата операции"])
-
-        period = "Все данные"
-        if year is not None and month is not None:
-            mask = (df["дата операции"].dt.year == year) & (
-                df["дата операции"].dt.month == month
+        if not filtered_list:
+            logger.warning(f"Нет данных за {target_date.month}.{target_date.year}")
+            return json.dumps(
+                {"error": f"Нет данных за {target_date.month}.{target_date.year}"}
             )
-            df = df[mask]
 
-            if df.empty:
-                print(f"Нет данных за {month}.{year}")
-                return None, None
+        logger.debug(f"Найдено {len(filtered_list)} транзакций за период")
 
-            start_date = df["дата операции"].min().strftime("%d.%m.%Y")
-            end_date = df["дата операции"].max().strftime("%d.%m.%Y")
-            period = f"{start_date} - {end_date}"
+        logger.debug("Агрегация данных по категориям...")
 
-        cashback = df.groupby("категория")["кэшбэк"].sum()
-        cashback = cashback.sort_values(ascending=False)
+        def reducer(acc, transaction):
+            category = transaction["category"]
+            cashback = transaction.get("cashback", 0)
+            acc[category] = acc.get(category, 0) + cashback
+            return acc
 
-        return cashback.to_dict(), period
+        result = reduce(reducer, filtered_list, {})
 
+        logger.debug("Фильтрация и сортировка результата...")
+        result = {
+            k: v
+            for k, v in sorted(result.items(), key=lambda item: item[1], reverse=True)
+            if v > 0
+        }
+
+        logger.info(f"Найдено {len(result)} категорий с положительным кэшбэком")
+        logger.debug(f"Результат: {result}")
+
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except ValueError as e:
+        logger.error(f"Ошибка формата даты: {str(e)}", exc_info=True)
+        return json.dumps({"error": "Неверный формат даты"})
     except Exception as e:
-        print(f"Ошибка анализа: {e}")
-        return None, None
-
-
-def print_results(results: Optional[Dict[str, float]], period: Optional[str]):
-    """Выводит результаты анализа"""
-    if not results:
-        print("Нет данных для отображения")
-        return
-
-    print(f"\nАнализ за период: {period}")
-    print("-" * 40)
-    for category, amount in results.items():
-        print(f"{category:<20}: {amount:>10.2f} руб.")
-    print("-" * 40)
-    print(f"Всего категорий: {len(results)}")
-    print(f"Общий кэшбэк: {sum(results.values()):.2f} руб.")
+        logger.error(f"Критическая ошибка: {str(e)}", exc_info=True)
+        return json.dumps({"error": "Внутренняя ошибка сервера"})

@@ -3,9 +3,13 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
+from cachetools import cached, TTLCache
 import pandas as pd
 import requests
+
+currency_cache = TTLCache(maxsize=10, ttl=3600)
+stocks_cache = TTLCache(maxsize=10, ttl=3600)
+rates_fallback_cache = TTLCache(maxsize=5, ttl=1800)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,7 @@ def load_and_prepare_data(
                 "Сумма операции": "amount",
                 "Категория": "category",
                 "Описание": "description",
+                "Кэшбэк": "cashback",
             }
         )
 
@@ -89,9 +94,6 @@ def load_and_prepare_data(
         df["card_number"] = df["card_number"].astype(str).str.strip().str[-4:]
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
 
-        df["category"] = df.get("Категория", "Не указано")
-        df["description"] = df.get("Описание", "Не указано")
-
         return df.dropna(subset=["amount"])
     except FileNotFoundError as e:
         logger.error(f"Файл не найден: {str(e)}", exc_info=True)
@@ -109,20 +111,26 @@ def load_and_prepare_data(
 def get_cards(
     file_xlsx: str = "data\\operations.xlsx", date_time: Optional[str] = None
 ) -> List[Dict[str, Any]]:
+    """Формирует список карт с информацией о расходах и кэшбэке за указанный период"""
     try:
         df = load_and_prepare_data(file_xlsx, date_time)
 
         if df.empty:
             return []
 
-        expenses = df[df["amount"] < 0]["amount"].sum()
+        cards = []
+        for card in df["card_number"].unique():
+            card_df = df[df["card_number"] == card]
+            expenses = card_df[card_df["amount"] < 0]["amount"].sum()
+            cards.append(
+                {
+                    "last_digits": card[-4:],
+                    "total_spent": round(-expenses, 2),
+                    "cashback": round((-expenses) / 100, 2),
+                }
+            )
 
-        return [
-            {
-                "last_digits": df.iloc[0]["card_number"][-4:],
-                "cashback": round((expenses / -100), 2),
-            }
-        ]
+        return cards
 
     except Exception as e:
         logger.error(f"Ошибка формирования карт: {str(e)}")
@@ -132,13 +140,16 @@ def get_cards(
 def get_top_transactions(
     file_xlsx: str = "data\\operations.xlsx", date_time: Optional[str] = None
 ) -> List[Dict[str, Any]] | None:
+    """Анализ больших транзакций за период"""
     try:
         df = load_and_prepare_data(file_xlsx, date_time)
 
         if df.empty:
             return None
 
-        expenses = df[df["amount"] < 0].copy()
+        expenses = df[df["amount"] < 0]
+        if expenses.empty:
+            return [{"message": "Нет расходных операций за период"}]
 
         if expenses.empty:
             return None
@@ -171,6 +182,9 @@ API_URL = "https://api.apilayer.com/exchangerates_data/latest?base=USD&symbols=R
 HEADERS = {"apikey": API_KEY}
 
 
+currency_cache = TTLCache(maxsize=10, ttl=3600)
+
+@cached(currency_cache)
 def get_currency_rates():
     """Получает курсы USD/RUB и EUR/RUB с обработкой ошибок"""
     try:
@@ -178,7 +192,6 @@ def get_currency_rates():
             return {"success": False, "error": "API_URL или API_KEY не заданы"}
 
         params = {"base": "USD", "symbols": "RUB,EUR"}
-
         response = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
         response.raise_for_status()
 
@@ -214,7 +227,9 @@ def get_currency_rates():
             "retry_suggestion": "Попробуйте позже или используйте резервный источник",
         }
 
+currency_cache = TTLCache(maxsize=5, ttl=1800)
 
+@cached(currency_cache)
 def get_rates_with_fallback():
     """Основная функция с резервными источниками"""
     result = get_currency_rates()
@@ -240,8 +255,9 @@ def get_rates_with_fallback():
 
 # ________________________Акции_____________________________
 def load_user_settings():
+    """Загрузка пользовательских настроек"""
     try:
-        with open("user_settings.json") as f:
+        with open("../user_settings.json") as f:
             return json.load(f)
     except Exception as e:
         logger.warning(f"Не удалось загрузить user_settings.json: {e}")
@@ -250,10 +266,12 @@ def load_user_settings():
             "user_stocks": ["AAPL", "AMZN", "GOOGL", "MSFT", "TSLA"],
         }
 
+currency_cache = TTLCache(maxsize=10, ttl=3600)
 
+@cached(currency_cache)
 def get_sp500_stocks():
     """Получение данных об акциях с обработкой ошибок"""
-    if not API_KEY or API_KEY == "YOUR_API_KEY":
+    if not API_KEY:
         logger.warning("API ключ для Alpha Vantage не настроен")
         return pd.DataFrame(
             [

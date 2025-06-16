@@ -33,5 +33,5 @@ pytest-cov = "^6.2.1"
 mypy = "^1.16.0"
 
 [tool.flake8]
-max-line-length = 120
+max-line-length = 119
 ignore = "E203, W503"

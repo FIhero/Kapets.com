@@ -1,6 +1,4 @@
-import os
-
-from src.services import analyze_cashback, load_data, print_results
+from src.services import analyze_cashback
 from src.views import main_info
 
 if __name__ == "__main__":
@@ -9,16 +7,7 @@ if __name__ == "__main__":
     print(main_info(date_time))
 
     # Сервисы
-    file_path = os.path.join("data\\operations.xlsx")
-    df = load_data(file_path)
+    file_xlsx = "data\\operations.xlsx"
 
-    if df is None:
-        exit()
-
-    print("\n1. Анализ за весь период:")
-    all_results, all_period = analyze_cashback(df)
-    print_results(all_results, all_period)
-
-    print("\n2. Анализ за конкретный месяц:")
-    month_results, month_period = analyze_cashback(df)
-    print_results(month_results, month_period)
+    full_year_result = analyze_cashback(file_xlsx, date_time)
+    print(full_year_result)
