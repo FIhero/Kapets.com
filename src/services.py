@@ -2,8 +2,9 @@ import json
 import logging
 from datetime import datetime
 from functools import reduce
+from typing import Any
 
-from src.utils import load_and_prepare_data, logger
+from src.utils import load_and_prepare_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ def analyze_cashback(file_xlsx: str, date_time: str) -> str:
             acc[category] = acc.get(category, 0) + cashback
             return acc
 
-        result = reduce(reducer, filtered_list, {})
+        result: dict[str, Any] = reduce(reducer, filtered_list, {})
 
         logger.debug("Фильтрация и сортировка результата...")
         result = {

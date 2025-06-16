@@ -2,14 +2,15 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from cachetools import cached, TTLCache
+from typing import Any, Dict, List, Optional, Union
+
 import pandas as pd
 import requests
+from cachetools import TTLCache, cached
 
-currency_cache = TTLCache(maxsize=10, ttl=3600)
-stocks_cache = TTLCache(maxsize=10, ttl=3600)
-rates_fallback_cache = TTLCache(maxsize=5, ttl=1800)
+currency_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
+stocks_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
+rates_fallback_cache: TTLCache[str, Any] = TTLCache(maxsize=5, ttl=1800)
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +43,23 @@ def get_date_time(date_time, date_format="%Y-%m-%d %H:%M:%S"):
 
 # ___________________________Операции транзакций__________________________________
 def load_and_prepare_data(
-    file_xlsx: str = "data\\operations.xlsx", date_time: Optional[str] = None
+    file_xlsx: Union[str, pd.DataFrame] = "data\\operations.xlsx",
+    date_time: Optional[str] = None,
 ) -> pd.DataFrame:
     """Общая функция для загрузки и подготовки данных"""
     try:
-        if not os.path.exists(file_xlsx):
-            raise FileNotFoundError(f"Файл не найден: {file_xlsx}")
+        if isinstance(file_xlsx, pd.DataFrame):
+            df = file_xlsx.copy()
+        else:
+            if not isinstance(file_xlsx, (str, bytes, os.PathLike)):
+                raise TypeError(
+                    "Путь к файлу должен быть строкой, bytes или os.PathLike"
+                )
 
-        df = pd.read_excel(file_xlsx, engine="openpyxl")
+            if not os.path.exists(file_xlsx):
+                raise FileNotFoundError(f"Файл не найден: {file_xlsx}")
+
+            df = pd.read_excel(file_xlsx, engine="openpyxl")
 
         required_cols = ["Дата операции", "Номер карты", "Сумма операции"]
         if not all(col in df.columns for col in required_cols):
@@ -98,11 +108,9 @@ def load_and_prepare_data(
     except FileNotFoundError as e:
         logger.error(f"Файл не найден: {str(e)}", exc_info=True)
         raise ValueError(f"Файл операций не найден: {file_xlsx}") from e
-
     except pd.errors.EmptyDataError as e:
         logger.error(f"Файл пуст: {str(e)}", exc_info=True)
         raise ValueError("Файл операций пуст") from e
-
     except Exception as e:
         logger.error(f"Неизвестная ошибка: {str(e)}", exc_info=True)
         raise ValueError(f"Ошибка обработки данных: {str(e)}") from e
@@ -184,6 +192,7 @@ HEADERS = {"apikey": API_KEY}
 
 currency_cache = TTLCache(maxsize=10, ttl=3600)
 
+
 @cached(currency_cache)
 def get_currency_rates():
     """Получает курсы USD/RUB и EUR/RUB с обработкой ошибок"""
@@ -227,7 +236,9 @@ def get_currency_rates():
             "retry_suggestion": "Попробуйте позже или используйте резервный источник",
         }
 
+
 currency_cache = TTLCache(maxsize=5, ttl=1800)
+
 
 @cached(currency_cache)
 def get_rates_with_fallback():
@@ -266,7 +277,9 @@ def load_user_settings():
             "user_stocks": ["AAPL", "AMZN", "GOOGL", "MSFT", "TSLA"],
         }
 
+
 currency_cache = TTLCache(maxsize=10, ttl=3600)
+
 
 @cached(currency_cache)
 def get_sp500_stocks():
