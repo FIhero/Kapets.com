@@ -6,8 +6,8 @@ from typing import Any
 
 from src.utils import load_and_prepare_data
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 def analyze_cashback(file_xlsx: str, date_time: str) -> str:

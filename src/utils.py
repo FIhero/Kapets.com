@@ -7,12 +7,14 @@ from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 import requests
 from cachetools import TTLCache, cached
+from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 currency_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
 stocks_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
 rates_fallback_cache: TTLCache[str, Any] = TTLCache(maxsize=5, ttl=1800)
-
-logger = logging.getLogger(__name__)
 
 
 def get_time_for_greeting():
@@ -87,7 +89,6 @@ def load_and_prepare_data(
                 start_date = datetime.strptime(start_of_month_str, "%d.%m.%Y %H:%M:%S")
                 end_date = datetime.strptime(today_str, "%d.%m.%Y %H:%M:%S")
 
-                # Фильтруем записи между началом месяца и указанной датой
                 mask = (df["date"] >= start_date) & (df["date"] <= end_date)
                 df = df.loc[mask].copy()
             except Exception as e:
@@ -187,7 +188,6 @@ def get_top_transactions(
 
 API_KEY = os.environ.get("API_KEY")
 API_URL = "https://api.apilayer.com/exchangerates_data/latest?base=USD&symbols=RUB,EUR"
-HEADERS = {"apikey": API_KEY}
 
 
 currency_cache = TTLCache(maxsize=10, ttl=3600)
@@ -197,20 +197,22 @@ currency_cache = TTLCache(maxsize=10, ttl=3600)
 def get_currency_rates():
     """Получает курсы USD/RUB и EUR/RUB с обработкой ошибок"""
     try:
-        if not API_URL or not API_KEY:
+        api_key_val = API_KEY
+
+        if not API_URL or not api_key_val:
             return {"success": False, "error": "API_URL или API_KEY не заданы"}
 
         params = {"base": "USD", "symbols": "RUB,EUR"}
-        response = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
+        response = requests.get(API_URL, params=params, timeout=10)
         response.raise_for_status()
 
         data = response.json()
 
-        if not data.get("success", False):
+        if not data.get("success", True):
             raise ValueError(
                 f"API error: {data.get('error', {}).get('info', 'Unknown error')}"
             )
-        if data.get("error"):  # If API returns error in its response
+        if data.get("error"):
             return {"success": False, "error": f"API error: {data['error']}"}
 
         usd_rub = data["rates"]["RUB"]
@@ -221,6 +223,7 @@ def get_currency_rates():
             "success": True,
             "rates": {"USD": round(usd_rub, 2), "EUR": round(eur_rub, 2)},
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "Основной API",
         }
 
     except requests.exceptions.RequestException as e:
@@ -235,9 +238,6 @@ def get_currency_rates():
             "error": str(e),
             "retry_suggestion": "Попробуйте позже или используйте резервный источник",
         }
-
-
-currency_cache = TTLCache(maxsize=5, ttl=1800)
 
 
 @cached(currency_cache)
@@ -260,7 +260,9 @@ def get_rates_with_fallback():
             }
         except Exception as e:
             print(f"Ошибка при получении курсов ЦБ РФ: {e}")
-
+            return result
+    if "source" not in result:
+        result["source"] = "Основной API"
     return result
 
 
@@ -268,59 +270,72 @@ def get_rates_with_fallback():
 def load_user_settings():
     """Загрузка пользовательских настроек"""
     try:
-        with open("../user_settings.json") as f:
+        with open("../user_settings.json", encoding="utf-8") as f:
             return json.load(f)
+    except FileNotFoundError:
+        logger.warning(
+            "Файл user_settings.json не найден. Используются настройки по умолчанию"
+        )
+    except json.JSONDecodeError as e:
+        logger.warning(f"Ошибка формата JSON в user_settings.json: {e}")
     except Exception as e:
-        logger.warning(f"Не удалось загрузить user_settings.json: {e}")
-        return {
-            "user_currencies": ["USD", "EUR"],
-            "user_stocks": ["AAPL", "AMZN", "GOOGL", "MSFT", "TSLA"],
-        }
+        logger.warning(f"Неизвестная ошибка при загрузке user_settings.json: {e}")
 
+    return {
+        "user_currencies": ["USD", "EUR"],
+        "user_stocks": ["AAPL", "AMZN", "GOOGL", "MSFT", "TSLA"],
+    }
+
+
+load_dotenv("../.env")
 
 currency_cache = TTLCache(maxsize=10, ttl=3600)
+ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 
 
-@cached(currency_cache)
 def get_sp500_stocks():
     """Получение данных об акциях с обработкой ошибок"""
-    if not API_KEY:
-        logger.warning("API ключ для Alpha Vantage не настроен")
-        return pd.DataFrame(
-            [
-                {"stock": "AAPL", "price": 185.25},
-                {"stock": "MSFT", "price": 328.39},
-                {"stock": "GOOGL", "price": 135.42},
-                {"stock": "AMZN", "price": 145.86},
-                {"stock": "TSLA", "price": 250.78},
-            ]
-        )
+    if not ALPHAVANTAGE_API_KEY:
+        logger.error("API ключ Alpha Vantage не настроен!")
+        return pd.DataFrame(columns=["stock", "price", "error"])
+
     try:
         settings = load_user_settings()
         stocks = settings.get("user_stocks", [])
 
         if not stocks:
             logger.warning("Нет акций для отображения в настройках")
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["stock", "price", "error"])
 
-        stock_data = []
+        results = []
         for symbol in stocks:
             try:
-                url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={API_KEY}"
-                response = requests.get(url, timeout=10)
+                url = (f"https://www.alphavantage.co/query?function="
+                       f"GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}")
+                response = requests.get(url, timeout=15)
                 response.raise_for_status()
                 data = response.json()
 
-                if "Global Quote" in data:
-                    price = float(data["Global Quote"]["05. price"])
-                    stock_data.append({"stock": symbol, "price": price})
-                else:
-                    logger.warning(f"Не удалось получить данные для акции {symbol}")
-            except Exception as e:
-                logger.error(f"Ошибка при получении акции {symbol}: {str(e)}")
+                if "Global Quote" not in data:
+                    logger.warning(f"Неверный формат ответа для {symbol}")
+                    results.append(
+                        {
+                            "stock": symbol,
+                            "price": None,
+                            "error": "Неверный формат ответа",
+                        }
+                    )
+                    continue
 
-        return pd.DataFrame(stock_data)
+                price = float(data["Global Quote"]["05. price"])
+                results.append({"stock": symbol, "price": price, "error": None})
+
+            except Exception as e:
+                logger.error(f"Ошибка для {symbol}: {str(e)}")
+                results.append({"stock": symbol, "price": None, "error": str(e)})
+
+        return pd.DataFrame(results)
 
     except Exception as e:
-        logger.error(f"Ошибка в get_sp500_stocks: {str(e)}")
-        return pd.DataFrame()
+        logger.error(f"Общая ошибка: {str(e)}")
+        return pd.DataFrame(columns=["stock", "price", "error"])

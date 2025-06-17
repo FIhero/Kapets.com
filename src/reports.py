@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Optional, TypeVar, Any
+from typing import Any, Optional, TypeVar
 
 import pandas as pd
 from black.lines import Callable
@@ -21,11 +21,12 @@ def ensure_data_dir():
     os.makedirs("data", exist_ok=True)
 
 
+F = TypeVar("F", bound=Callable[..., pd.DataFrame])
 
-F = TypeVar('F', bound=Callable[..., pd.DataFrame])
 
 def report_to_file(default_filename: Optional[str] = None):
     """Декоратор для сохранения отчёта в папку data"""
+
     def decorator(func: Callable[..., pd.DataFrame]):
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> pd.DataFrame:
@@ -65,9 +66,7 @@ def report_to_file(default_filename: Optional[str] = None):
 
 @report_to_file("spending_report.json")
 def spending_by_category(
-    transactions: pd.DataFrame,
-    category: str,
-    date: Optional[str] = None
+    transactions: pd.DataFrame, category: str, date: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Возвращает траты по указанной категории за последние 3 месяца.

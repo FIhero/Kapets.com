@@ -21,6 +21,6 @@ if __name__ == "__main__":
 
     # Отчет
     df = load_and_prepare_data(file_xlsx_1)
-    category = input("Введите категория:")
+    category = "Транспорт"  # input("Введите категорию:")
     result = spending_by_category(df, category, date_time)
     print(result)
