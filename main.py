@@ -13,14 +13,14 @@ if __name__ == "__main__":
     print(main_info(date_time))
 
     # Сервисы
-    file_xlsx = "data\\operations.xlsx"
-    file_xlsx_1 = pd.read_excel("data\\operations.xlsx")
+    file_xlsx_1 = "data\\operations.xlsx"
+    file_xlsx = pd.read_excel("data\\operations.xlsx")
 
-    full_year_result = analyze_cashback(file_xlsx, date_time)
+    full_year_result = analyze_cashback(file_xlsx_1, date_time)
     print(full_year_result)
 
     # Отчет
-    df = load_and_prepare_data(file_xlsx_1)
+    df = load_and_prepare_data(file_xlsx)
     category = "Транспорт"  # input("Введите категорию:")
     result = spending_by_category(df, category, date_time)
     print(result)

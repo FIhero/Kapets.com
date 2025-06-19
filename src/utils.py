@@ -2,19 +2,15 @@ import json
 import logging
 import os
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 import requests
-from cachetools import TTLCache, cached
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-currency_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
-stocks_cache: TTLCache[str, Any] = TTLCache(maxsize=10, ttl=3600)
-rates_fallback_cache: TTLCache[str, Any] = TTLCache(maxsize=5, ttl=1800)
 
 
 def get_time_for_greeting():
@@ -190,10 +186,7 @@ API_KEY = os.environ.get("API_KEY")
 API_URL = "https://api.apilayer.com/exchangerates_data/latest?base=USD&symbols=RUB,EUR"
 
 
-currency_cache = TTLCache(maxsize=10, ttl=3600)
-
-
-@cached(currency_cache)
+@lru_cache(maxsize=128, typed=False)
 def get_currency_rates():
     """Получает курсы USD/RUB и EUR/RUB с обработкой ошибок"""
     try:
@@ -240,7 +233,7 @@ def get_currency_rates():
         }
 
 
-@cached(currency_cache)
+@lru_cache(maxsize=128, typed=False)
 def get_rates_with_fallback():
     """Основная функция с резервными источниками"""
     result = get_currency_rates()
@@ -288,8 +281,6 @@ def load_user_settings():
 
 
 load_dotenv("../.env")
-
-currency_cache = TTLCache(maxsize=10, ttl=3600)
 ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 
 
@@ -310,8 +301,10 @@ def get_sp500_stocks():
         results = []
         for symbol in stocks:
             try:
-                url = (f"https://www.alphavantage.co/query?function="
-                       f"GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}")
+                url = (
+                    f"https://www.alphavantage.co/query?function="
+                    f"GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}"
+                )
                 response = requests.get(url, timeout=15)
                 response.raise_for_status()
                 data = response.json()

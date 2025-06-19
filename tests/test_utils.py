@@ -6,9 +6,12 @@ from unittest.mock import mock_open, patch
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 
+import src.utils
 from src.utils import (
     get_cards,
+    get_currency_rates,
     get_date_time,
     get_time_for_greeting,
     get_top_transactions,
@@ -20,9 +23,13 @@ API_URL = os.environ.get("API_URL")
 API_KEY = os.environ.get("API_KEY")
 
 
-def get_currency_rates():
-    if not API_URL or not API_KEY:
-        return {"success": False, "error": "API_URL или API_KEY не заданы"}
+@pytest.fixture(autouse=True)
+def clear_caches():
+    """Автоматически очищает кеш перед каждым тестом"""
+    from src.utils import get_currency_rates, get_rates_with_fallback
+
+    get_currency_rates.cache_clear()
+    get_rates_with_fallback.cache_clear()
 
 
 @pytest.fixture
@@ -91,6 +98,14 @@ def expenses_fixture(tmp_path):
     )
     df.to_excel(file_path, index=False)
     return file_path
+
+
+@pytest.fixture
+def mock_requests_get():
+    with patch("src.utils.requests.get") as mock_get:
+        yield mock_get
+    if hasattr(get_currency_rates, "cache_clear"):
+        get_currency_rates.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -229,9 +244,101 @@ def test_expenses_count(expenses_fixture):
 
 
 # -----------------------------------Тесты по курсу рубля---------------------------------------------------------
+def test_successful_response(monkeypatch, mock_requests_get):
+    import src.utils
 
-# Я не знаю как их делать, хоть так, хоть сяк, постоянно косяк. Чувствую себя инвалидом .･ﾟﾟ･(／ω＼)･ﾟﾟ･.
-# Зато по отчету 85% покрытия, что уже хорошо
+    monkeypatch.setattr(src.utils, "API_KEY", "test_key")
+    monkeypatch.setattr(src.utils, "API_URL", "https://test.api")
+
+    src.utils.get_currency_rates.cache_clear()
+
+    mock_response = {"success": True, "rates": {"RUB": 90.5, "EUR": 0.9}, "base": "USD"}
+    mock_requests_get.return_value.json.return_value = mock_response
+    mock_requests_get.return_value.raise_for_status.return_value = None
+
+    result = src.utils.get_currency_rates()
+    print("Actual result:", result)
+
+    assert result["success"] is True
+    assert result["rates"]["USD"] == 90.5
+    assert result["rates"]["EUR"] == pytest.approx(90.5 / 0.9, 0.01)
+
+
+def test_get_currency_rates_api_error(monkeypatch, mock_requests_get, clear_caches):
+    monkeypatch.setattr(src.utils, "API_KEY", "test_key")
+    monkeypatch.setattr(src.utils, "API_URL", "https://test.api")
+
+    mock_response = {"success": False, "error": {"info": "Invalid API key"}}
+    mock_requests_get.return_value.json.return_value = mock_response
+
+    mock_requests_get.return_value.raise_for_status.side_effect = [
+        None,
+        requests.exceptions.HTTPError("401 Unauthorized"),
+    ]
+
+    result = src.utils.get_currency_rates()
+    assert result["success"] is False
+    assert "Invalid API key" in result["error"]
+
+
+def test_get_currency_rates_network_error(monkeypatch, mock_requests_get):
+    monkeypatch.setattr(src.utils, "API_KEY", "test_key")
+    monkeypatch.setattr(src.utils, "API_URL", "https://test.api")
+
+    mock_requests_get.side_effect = requests.exceptions.ConnectionError("Timeout")
+
+    result = src.utils.get_currency_rates()
+
+    print("Actual result:", result)
+    assert result["success"] is False
+    assert "Timeout" in result["error"]
+    assert "Проверьте подключение" in result["retry_suggestion"]
+
+
+def test_fallback_secondary_ok(monkeypatch, mock_requests_get):
+    monkeypatch.setattr(src.utils, "API_KEY", "test_key")
+    monkeypatch.setattr(src.utils, "API_URL", "https://test.api")
+
+    mock_requests_get.return_value.json.return_value = {
+        "success": False,
+        "error": "API down",
+    }
+
+    with patch("src.utils.requests.get") as mock_fallback:
+        mock_fallback.return_value.json.return_value = {
+            "Valute": {"USD": {"Value": 91.2}, "EUR": {"Value": 99.1}}
+        }
+
+        result = src.utils.get_rates_with_fallback()
+
+        print("Fallback result:", result)
+        assert result["rates"]["USD"] == 91.2
+        assert result["rates"]["EUR"] == 99.1
+        assert "ЦБ РФ (резервный)" in result["source"]
+
+
+def test_fallback_all_fail(monkeypatch, mock_requests_get, clear_caches):
+    monkeypatch.setattr(src.utils, "API_KEY", "test_key")
+    monkeypatch.setattr(src.utils, "API_URL", "https://test.api")
+
+    mock_requests_get.return_value.json.return_value = {
+        "success": False,
+        "error": "API down",
+    }
+    mock_requests_get.return_value.raise_for_status.side_effect = (
+        requests.exceptions.HTTPError("500 Server Error")
+    )
+
+    with patch("src.utils.requests.get") as mock_fallback:
+        mock_fallback.side_effect = requests.exceptions.Timeout("Server not responding")
+
+        result = src.utils.get_rates_with_fallback()
+
+        assert result["success"] is False
+        assert ("API down" in result["error"]) or (
+            "Server not responding" in result["error"]
+        )
+        assert "retry_suggestion" in result
 
 
 # ---------------------------------------Тесты по Акциям------------------------------------------------------

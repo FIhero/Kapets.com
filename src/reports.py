@@ -3,10 +3,9 @@ import logging
 import os
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Any, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 import pandas as pd
-from black.lines import Callable
 
 logging.basicConfig(
     level=logging.INFO,
